@@ -1,0 +1,107 @@
+name: "Notification"
+description: "Send email notifications for workflow results"
+
+inputs:
+  status:
+    description: "Workflow status"
+    required: false
+  service:
+    description: "Service name or workflow name"
+    required: false
+  webhook-url:
+    description: "Slack incoming webhook URL"
+    required: false
+  email-to:
+    description: "Email recipient"
+    required: false
+  email-from:
+    description: "Email sender"
+    required: false
+  smtp-server:
+    description: "SMTP server host"
+    required: false
+  smtp-port:
+    description: "SMTP server port"
+    required: false
+    default: "587"
+  smtp-username:
+    description: "SMTP username"
+    required: false
+  smtp-password:
+    description: "SMTP password"
+    required: false
+  details:
+    description: "Additional notification details"
+    required: false
+  pipeline_name:
+    description: "Pipeline name"
+    required: false
+  repository_name:
+    description: "Repository name"
+    required: false
+  failure_reason:
+    description: "Failure reason or summary"
+    required: false
+  author:
+    description: "Pull request author"
+    required: false
+  smtp_username:
+    description: "SMTP username"
+    required: false
+  smtp_password:
+    description: "SMTP password"
+    required: false
+  smtp_server:
+    description: "SMTP server host"
+    required: false
+  smtp_port:
+    description: "SMTP server port"
+    required: false
+  mail_from:
+    description: "Email sender"
+    required: false
+  mail_to:
+    description: "Email recipient"
+    required: false
+  slack_webhook:
+    description: "Slack incoming webhook URL"
+    required: false
+  workflow_url:
+    description: "Workflow run URL"
+    required: false
+  report_url:
+    description: "Scanner report URL"
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Send email notification
+      if: ${{ (inputs.email-to != '' || inputs.mail_to != '') && (inputs.email-from != '' || inputs.mail_from != '') && (inputs.smtp-server != '' || inputs.smtp_server != '') && (inputs.smtp-port != '' || inputs.smtp_port != '') && (inputs.smtp-username != '' || inputs.smtp_username != '') && (inputs.smtp-password != '' || inputs.smtp_password != '') }}
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ inputs.smtp-server || inputs.smtp_server }}
+        server_port: ${{ inputs.smtp-port || inputs.smtp_port }}
+        username: ${{ inputs.smtp-username || inputs.smtp_username }}
+        password: ${{ inputs.smtp-password || inputs.smtp_password }}
+        subject: "${{ inputs.pipeline_name || github.workflow }} failed"
+        to: ${{ inputs.email-to || inputs.mail_to }}
+        from: ${{ inputs.email-from || inputs.mail_from }}
+        body: |
+          Medicojob CI notification
+
+          Pipeline: ${{ inputs.pipeline_name || github.workflow }}
+          Repository: ${{ inputs.repository_name || github.repository }}
+          Status: ${{ inputs.status || 'failed' }}
+          Author: ${{ inputs.author || github.actor }}
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Workflow: ${{ inputs.workflow_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          Report: ${{ inputs.report_url }}
+
+          ${{ inputs.failure_reason || inputs.details }}
+
+    - name: Skip email notification
+      if: ${{ (inputs.email-to == '' && inputs.mail_to == '') || (inputs.email-from == '' && inputs.mail_from == '') || (inputs.smtp-server == '' && inputs.smtp_server == '') || (inputs.smtp-port == '' && inputs.smtp_port == '') || (inputs.smtp-username == '' && inputs.smtp_username == '') || (inputs.smtp-password == '' && inputs.smtp_password == '') }}
+      shell: bash
+      run: echo "Email notification settings are not fully configured; skipping email."

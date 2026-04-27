@@ -1,0 +1,174 @@
+name: Reusable Code Quality
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Service name"
+        required: true
+        type: string
+      service_path:
+        description: "Service folder path"
+        required: true
+        type: string
+      sonar_project_key:
+        description: "SonarQube project key"
+        required: false
+        type: string
+      sonar_token_secret_name:
+        description: "GitHub secret name containing the SonarQube token"
+        required: false
+        type: string
+    outputs:
+      quality_gate_status:
+        description: "SonarQube quality gate result"
+        value: ${{ jobs.code-quality.outputs.quality_gate_status }}
+      notify_tool:
+        description: "Tool name for notification"
+        value: ${{ jobs.code-quality.outputs.notify_tool }}
+      notify_title:
+        description: "Notification title"
+        value: ${{ jobs.code-quality.outputs.notify_title }}
+      notify_summary:
+        description: "Notification summary"
+        value: ${{ jobs.code-quality.outputs.notify_summary }}
+
+permissions:
+  contents: read
+
+jobs:
+  code-quality:
+    name: SonarQube code quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
+
+    outputs:
+      quality_gate_status: ${{ steps.set_outputs.outputs.quality_gate_status }}
+      notify_tool: ${{ steps.set_outputs.outputs.notify_tool }}
+      notify_title: ${{ steps.set_outputs.outputs.notify_title }}
+      notify_summary: ${{ steps.set_outputs.outputs.notify_summary }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore Sonar cache
+        id: sonar-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar-cache
+          restore-keys: |
+            ${{ runner.os }}-sonar-cache
+
+      - name: Validate Sonar configuration
+        id: validate-sonar
+        continue-on-error: true
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_PROJECT_KEY: ${{ inputs.sonar_project_key || vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+          SONAR_TOKEN: ${{ secrets[inputs.sonar_token_secret_name] || secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_HOST_URL" ]; then
+            echo "SONAR_HOST_URL is empty"
+            exit 1
+          fi
+
+          case "$SONAR_HOST_URL" in
+            http://*|https://*)
+              echo "SONAR_HOST_URL format looks valid"
+              ;;
+            *)
+              echo "SONAR_HOST_URL must start with http:// or https://"
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$SONAR_PROJECT_KEY" ]; then
+            echo "SONAR_PROJECT_KEY is empty"
+            exit 1
+          fi
+
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "SONAR_TOKEN is empty"
+            exit 1
+          fi
+
+          
+
+      - name: Scan using SonarQube
+        if: ${{ steps.validate-sonar.outcome == 'success' }}
+        uses: SonarSource/sonarqube-scan-action@v7.1.0
+        id: sonar-scan
+        continue-on-error: true
+        with:
+          projectBaseDir: ${{ inputs.service_path }}
+          args: >-
+            -Dsonar.projectKey=${{ inputs.sonar_project_key || vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.projectName=${{ inputs.service_name }}
+        env:
+          SONAR_TOKEN: ${{ secrets[inputs.sonar_token_secret_name] || secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Check SonarQube Quality Gate
+        id: qg
+        if: ${{ steps.validate-sonar.outcome == 'success' && steps.sonar-scan.outcome == 'success' }}
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        with:
+          pollingTimeoutSec: 300
+          scanMetadataReportFile: ${{ inputs.service_path }}/.scannerwork/report-task.txt
+        env:
+          SONAR_TOKEN: ${{ secrets[inputs.sonar_token_secret_name] || secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        continue-on-error: true
+
+      - name: Show quality gate outcome
+        run: |
+          echo "Quality gate status: ${{ steps.qg.outputs.quality-gate-status }}"
+
+      - name: Set normalized outputs
+        id: set_outputs
+        run: |
+          status="${{ steps.qg.outputs.quality-gate-status }}"
+          if [ "${{ steps.validate-sonar.outcome }}" != "success" ]; then
+            status="FAILED"
+            summary="SonarQube configuration is invalid for ${{ inputs.service_name }}. Check SONAR_HOST_URL, SONAR_PROJECT_KEY, and SONAR_TOKEN."
+          elif [ "${{ steps.sonar-scan.outcome }}" != "success" ]; then
+            status="FAILED"
+            summary="SonarQube scan failed for ${{ inputs.service_name }}. Review the workflow logs."
+          elif [ "$status" != "PASSED" ]; then
+            status="FAILED"
+            summary="Code quality gate failed for ${{ inputs.service_name }}. Review SonarQube issues before continuing."
+          else
+            summary="Quality gate passed successfully for ${{ inputs.service_name }}."
+          fi
+
+          echo "quality_gate_status=${status}" >> "$GITHUB_OUTPUT"
+          echo "notify_tool=sonar" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" = "FAILED" ]; then
+            echo "notify_title=SonarQube Quality Gate Failed" >> "$GITHUB_OUTPUT"
+            echo "notify_summary=${summary}" >> "$GITHUB_OUTPUT"
+          else
+            echo "notify_title=SonarQube Passed" >> "$GITHUB_OUTPUT"
+            echo "notify_summary=${summary}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Sonar cache before failing job
+        if: ${{ steps.set_outputs.outputs.quality_gate_status == 'FAILED' && steps.sonar-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ steps.sonar-cache.outputs.cache-primary-key }}
+
+      - name: Stop pipeline - SonarQube gate failed
+        if: ${{ steps.set_outputs.outputs.quality_gate_status == 'FAILED' }}
+        run: |
+          echo "SonarQube Quality Gate failed. Stopping pipeline."
+          exit 1

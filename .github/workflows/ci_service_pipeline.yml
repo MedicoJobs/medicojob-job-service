@@ -1,0 +1,142 @@
+name: Reusable Service Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Service name"
+        required: true
+        type: string
+      service_path:
+        description: "Service folder path"
+        required: true
+        type: string
+      sonar_project_key:
+        description: "SonarQube project key"
+        required: false
+        type: string
+      sonar_token_secret_name:
+        description: "GitHub secret name containing the SonarQube token"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  get-email:
+    runs-on: ubuntu-latest
+    outputs:
+      email: ${{ steps.author.outputs.email }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: author
+        shell: bash
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          EMAIL=$(git show -s --format='%ae' "$SHA" || echo "")
+          echo "email=$EMAIL" >> "$GITHUB_OUTPUT"
+
+  service-ci:
+    name: "${{ inputs.service_name }} service ci"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.service_path }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ${{ inputs.service_path }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests when available
+        run: |
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+            CI=true npm test
+          else
+            echo "No test script found for ${{ inputs.service_name }}."
+          fi
+
+      - name: Build app when available
+        run: |
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "No build script found for ${{ inputs.service_name }}."
+          fi
+
+  sonar-scan:
+    needs: service-ci
+    uses: ./.github/workflows/ci_sonar_scan.yml
+    with:
+      service_name: ${{ inputs.service_name }}
+      service_path: ${{ inputs.service_path }}
+      sonar_project_key: ${{ inputs.sonar_project_key }}
+      sonar_token_secret_name: ${{ inputs.sonar_token_secret_name }}
+    secrets: inherit
+
+  snyk-scan:
+    needs: sonar-scan
+    if: ${{ needs.sonar-scan.outputs.quality_gate_status == 'PASSED' }}
+    uses: ./.github/workflows/ci_snyk_scan.yml
+    with:
+      service_name: ${{ inputs.service_name }}
+      service_path: ${{ inputs.service_path }}
+    secrets: inherit
+
+  notify:
+    needs:
+      - get-email
+      - sonar-scan
+      - snyk-scan
+    if: ${{ always() && (needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status == 'FAILED' || needs.snyk-scan.outputs.snyk_status == 'failure') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sonar mail notification
+        if: ${{ needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status == 'FAILED' }}
+        uses: ./.github/actions/notification-action
+        with:
+          pipeline_name: ${{ github.workflow }}
+          repository_name: ${{ github.repository }}
+          failure_reason: ${{ needs.sonar-scan.outputs.notify_summary || 'SonarQube quality gate failed. Snyk scan was skipped.' }}
+          author: ${{ github.event.pull_request.user.login || github.actor }}
+          smtp_username: ${{ secrets.SMTP_USERNAME }}
+          smtp_password: ${{ secrets.SMTP_PASSWORD }}
+          smtp_server: ${{ secrets.SMTP_SERVER }}
+          smtp_port: ${{ secrets.SMTP_PORT || '587' }}
+          mail_from: ${{ secrets.MAIL_FROM }}
+          mail_to: ${{ secrets.MAIL_TO || needs.get-email.outputs.email }}
+          workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          report_url: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}/dashboard?id=${{ inputs.sonar_project_key || vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+
+      - name: Snyk mail notification
+        if: ${{ needs.snyk-scan.outputs.snyk_status == 'failure' }}
+        uses: ./.github/actions/notification-action
+        with:
+          pipeline_name: ${{ github.workflow }}
+          repository_name: ${{ github.repository }}
+          failure_reason: ${{ needs.snyk-scan.outputs.notify_summary }}
+          author: ${{ github.event.pull_request.user.login || github.actor }}
+          smtp_username: ${{ secrets.SMTP_USERNAME }}
+          smtp_password: ${{ secrets.SMTP_PASSWORD }}
+          smtp_server: ${{ secrets.SMTP_SERVER }}
+          smtp_port: ${{ secrets.SMTP_PORT || '587' }}
+          mail_from: ${{ secrets.MAIL_FROM }}
+          mail_to: ${{ secrets.MAIL_TO || needs.get-email.outputs.email }}
+          workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          report_url: https://app.snyk.io/org/${{ secrets.SNYK_ORG }}/projects/${{ secrets.SNYK_PROJECT_ID }}
