@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const applicationSchema = new mongoose.Schema({
   doctorId: { type: String, required: true },
@@ -32,4 +32,4 @@ jobSchema.index({ specialization: 1 });
 jobSchema.index({ location: 1 });
 jobSchema.index({ status: 1, createdAt: -1 });
 
-module.exports = mongoose.model('Job', jobSchema);
+export default mongoose.model('Job', jobSchema);

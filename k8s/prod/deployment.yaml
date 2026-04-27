@@ -15,10 +15,20 @@ spec:
       labels:
         app: job-service
     spec:
+      automountServiceAccountToken: false
       containers:
       - name: job-service
         image: pavithrasambath2003/job-service:v1
         imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+            ephemeral-storage: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+            ephemeral-storage: "1Gi"
         readinessProbe:
           tcpSocket:
             port: 5002

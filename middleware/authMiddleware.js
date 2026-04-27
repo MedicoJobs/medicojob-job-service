@@ -1,6 +1,6 @@
-const jwt = require('jsonwebtoken');
+import jwt from 'jsonwebtoken';
 
-const authMiddleware = (req, res, next) => {
+export const authMiddleware = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ message: 'No token, authorization denied' });
 
@@ -13,7 +13,7 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
-const authorize = (...roles) => {
+export const authorize = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ message: 'Forbidden' });
@@ -21,5 +21,3 @@ const authorize = (...roles) => {
     next();
   };
 };
-
-module.exports = { authMiddleware, authorize };
