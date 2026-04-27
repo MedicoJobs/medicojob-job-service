@@ -1,6 +1,6 @@
-const express = require('express');
-const { createJob, getJobs, getJobById, applyForJob, updateApplicationStatus, getMyApplications, deleteJob } = require('../controllers/jobController');
-const { authMiddleware, authorize } = require('../middleware/authMiddleware');
+import express from 'express';
+import { createJob, getJobs, getJobById, applyForJob, updateApplicationStatus, getMyApplications, deleteJob } from '../controllers/jobController.js';
+import { authMiddleware, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -12,4 +12,4 @@ router.post('/:id/apply', authMiddleware, applyForJob);
 router.patch('/:jobId/application/:doctorId', authMiddleware, authorize('hospital'), updateApplicationStatus);
 router.delete('/:id', authMiddleware, authorize('hospital'), deleteJob);
 
-module.exports = router;
+export default router;

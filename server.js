@@ -1,16 +1,16 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const http = require('http');
-const socketIo = require('socket.io');
-const cron = require('node-cron');
-const jobRoutes = require('./routes/jobRoutes');
-const jobController = require('./controllers/jobController');
-const Job = require('./models/Job');
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import cron from 'node-cron';
+import jobRoutes from './routes/jobRoutes.js';
+import { setIo } from './controllers/jobController.js';
+import Job from './models/Job.js';
 
 const app = express();
-const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: '*' } });
+const server = createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(cors());
 app.use(express.json());
@@ -21,7 +21,7 @@ app.use((req, res, next) => {
   next();
 });
 
-jobController.setIo(io);
+setIo(io);
 
 app.use('/jobs', jobRoutes);
 
@@ -46,9 +46,12 @@ cron.schedule('0 * * * *', async () => {
 
 const MONGO_URI = process.env.MONGO_URI_JOB || process.env.MONGO_URI;
 
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('Job Service DB Connected'))
-  .catch(err => console.error(err));
+try {
+  await mongoose.connect(MONGO_URI);
+  console.log('Job Service DB Connected');
+} catch (err) {
+  console.error(err);
+}
 
 const PORT = process.env.PORT || 5002;
 server.listen(PORT, () => console.log(`Job Service running on port ${PORT}`));

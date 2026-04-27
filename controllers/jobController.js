@@ -1,9 +1,9 @@
-const Job = require('../models/Job');
+import Job from '../models/Job.js';
 let io;
 
-exports.setIo = (socketIo) => { io = socketIo; };
+export const setIo = (socketIo) => { io = socketIo; };
 
-exports.createJob = async (req, res) => {
+export const createJob = async (req, res) => {
   try {
     const normalizedTitle = req.body.title?.trim();
     const normalizedLocation = req.body.location?.trim();
@@ -64,7 +64,7 @@ exports.createJob = async (req, res) => {
   }
 };
 
-exports.getJobs = async (req, res) => {
+export const getJobs = async (req, res) => {
   try {
     const { specialization, location, salary, type, status } = req.query;
     let query = {};
@@ -87,7 +87,7 @@ exports.getJobs = async (req, res) => {
   }
 };
 
-exports.getJobById = async (req, res) => {
+export const getJobById = async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
@@ -98,7 +98,7 @@ exports.getJobById = async (req, res) => {
 };
 
 // GET /jobs/my-applications — returns all jobs a doctor has applied to
-exports.getMyApplications = async (req, res) => {
+export const getMyApplications = async (req, res) => {
   try {
     const doctorId = req.user.id;
     const jobs = await Job.find({ 'applications.doctorId': doctorId });
@@ -126,7 +126,7 @@ exports.getMyApplications = async (req, res) => {
   }
 };
 
-exports.applyForJob = async (req, res) => {
+export const applyForJob = async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job not found' });
@@ -152,7 +152,7 @@ exports.applyForJob = async (req, res) => {
   }
 };
 
-exports.updateApplicationStatus = async (req, res) => {
+export const updateApplicationStatus = async (req, res) => {
   try {
     const { jobId, doctorId } = req.params;
     const { status, rejectionReason = '', nextStep = '' } = req.body;
@@ -197,7 +197,7 @@ exports.updateApplicationStatus = async (req, res) => {
   }
 };
 
-exports.deleteJob = async (req, res) => {
+export const deleteJob = async (req, res) => {
   try {
     const job = await Job.findOneAndDelete({ _id: req.params.id, hospitalId: req.user.id });
     if (!job) return res.status(404).json({ message: 'Job not found or unauthorized' });
