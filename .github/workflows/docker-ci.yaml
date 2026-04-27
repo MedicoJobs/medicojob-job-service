@@ -4,9 +4,9 @@ on:
   pull_request:
     types:
       - closed
+      - labeled
     branches:
       - main
-      - master
 
 permissions:
   contents: read
@@ -24,3 +24,4 @@ jobs:
       service_path: .
     secrets:
       GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
