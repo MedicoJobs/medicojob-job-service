@@ -1,0 +1,26 @@
+name: job-service Docker Image Pipeline
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  packages: write
+  security-events: write
+
+jobs:
+  docker:
+    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'build') }}
+    uses: ./.github/workflows/docker_service_pipeline.yml
+    with:
+      service_name: job-service
+      service_path: .
+    secrets:
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

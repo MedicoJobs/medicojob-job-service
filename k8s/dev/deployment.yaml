@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: dev
+  name: job-service
+  labels:
+    app: job-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-service
+  template:
+    metadata:
+      labels:
+        app: job-service
+    spec:
+      containers:
+      - name: job-service
+        image: pavithrasambath2003/job-service:v1
+        imagePullPolicy: IfNotPresent
+        readinessProbe:
+          tcpSocket:
+            port: 5002
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 5002
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        ports:
+        - containerPort: 5002
+        env:
+        - name: PORT
+          value: "5002"
+        envFrom:
+        - configMapRef:
+            name: medicojob-config
+        - secretRef:
+            name: medicojob-secrets
+
+
+
