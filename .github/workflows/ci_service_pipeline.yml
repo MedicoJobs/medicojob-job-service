@@ -101,14 +101,14 @@ jobs:
       - get-email
       - sonar-scan
       - snyk-scan
-    if: ${{ always() && (needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status == 'FAILED' || needs.snyk-scan.outputs.snyk_status == 'failure') }}
+    if: ${{ always() && (needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status != 'PASSED' || needs.snyk-scan.outputs.snyk_status == 'failure') }}
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Sonar mail notification
-        if: ${{ needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status == 'FAILED' }}
+        if: ${{ needs.sonar-scan.result == 'failure' || needs.sonar-scan.outputs.quality_gate_status != 'PASSED' }}
         uses: ./.github/actions/notification-action
         with:
           pipeline_name: ${{ github.workflow }}

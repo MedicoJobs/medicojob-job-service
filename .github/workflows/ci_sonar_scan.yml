@@ -47,10 +47,10 @@ jobs:
         shell: bash
 
     outputs:
-      quality_gate_status: ${{ steps.set_outputs.outputs.quality_gate_status }}
-      notify_tool: ${{ steps.set_outputs.outputs.notify_tool }}
-      notify_title: ${{ steps.set_outputs.outputs.notify_title }}
-      notify_summary: ${{ steps.set_outputs.outputs.notify_summary }}
+      quality_gate_status: ${{ steps.qg.outputs.quality-gate-status }}
+      notify_tool: sonar
+      notify_title: SonarQube Quality Gate Failed
+      notify_summary: SonarQube quality gate failed for ${{ inputs.service_name }}. Review SonarQube issues before continuing.
 
     steps:
       - name: Checkout code
@@ -131,44 +131,3 @@ jobs:
       - name: Show quality gate outcome
         run: |
           echo "Quality gate status: ${{ steps.qg.outputs.quality-gate-status }}"
-
-      - name: Set normalized outputs
-        id: set_outputs
-        run: |
-          status="${{ steps.qg.outputs.quality-gate-status }}"
-          if [ "${{ steps.validate-sonar.outcome }}" != "success" ]; then
-            status="FAILED"
-            summary="SonarQube configuration is invalid for ${{ inputs.service_name }}. Check SONAR_HOST_URL, SONAR_PROJECT_KEY, and SONAR_TOKEN."
-          elif [ "${{ steps.sonar-scan.outcome }}" != "success" ]; then
-            status="FAILED"
-            summary="SonarQube scan failed for ${{ inputs.service_name }}. Review the workflow logs."
-          elif [ "$status" != "PASSED" ]; then
-            status="FAILED"
-            summary="Code quality gate failed for ${{ inputs.service_name }}. Review SonarQube issues before continuing."
-          else
-            summary="Quality gate passed successfully for ${{ inputs.service_name }}."
-          fi
-
-          echo "quality_gate_status=${status}" >> "$GITHUB_OUTPUT"
-          echo "notify_tool=sonar" >> "$GITHUB_OUTPUT"
-
-          if [ "$status" = "FAILED" ]; then
-            echo "notify_title=SonarQube Quality Gate Failed" >> "$GITHUB_OUTPUT"
-            echo "notify_summary=${summary}" >> "$GITHUB_OUTPUT"
-          else
-            echo "notify_title=SonarQube Passed" >> "$GITHUB_OUTPUT"
-            echo "notify_summary=${summary}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Save Sonar cache before failing job
-        if: ${{ steps.set_outputs.outputs.quality_gate_status == 'FAILED' && steps.sonar-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.sonar/cache
-          key: ${{ steps.sonar-cache.outputs.cache-primary-key }}
-
-      - name: Stop pipeline - SonarQube gate failed
-        if: ${{ steps.set_outputs.outputs.quality_gate_status == 'FAILED' }}
-        run: |
-          echo "SonarQube Quality Gate failed. Stopping pipeline."
-          exit 1
