@@ -77,9 +77,8 @@ const localJobs = [
   },
 ];
 
-if (!MONGO_URI) {
-  console.warn('MONGO_URI_JOB or MONGO_URI is not even configured. Starting Job Service in local in-memory mode.');
-
+const mountLocalJobRoutes = (reason) => {
+  console.warn(`${reason} Starting Job Service in local in-memory mode.`);
   app.get('/jobs', (req, res) => {
     const { specialization, location, salary, type, status } = req.query;
     const minSalary = salary ? Number(salary) : null;
@@ -106,15 +105,19 @@ if (!MONGO_URI) {
 
     res.json(job);
   });
+};
+
+if (!MONGO_URI) {
+  mountLocalJobRoutes('MONGO_URI_JOB or MONGO_URI is not configured.');
 } else {
   try {
-    await mongoose.connect(MONGO_URI);
+    await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 8000 });
     console.log('Job Service DB Connected');
+    app.use('/jobs', jobRoutes);
   } catch (err) {
-    console.error(err);
+    console.error('Job Service DB Connection Error:', err.message);
+    mountLocalJobRoutes('MongoDB connection failed.');
   }
-
-  app.use('/jobs', jobRoutes);
 }
 
 const PORT = process.env.PORT || 5002;

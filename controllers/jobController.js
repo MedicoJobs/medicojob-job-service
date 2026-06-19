@@ -1,12 +1,22 @@
 import Job from '../models/Job.js';
+import { createCalendarLink, createGoogleMeetLink, sendInterviewNotification } from '../utils/interviewScheduling.js';
 let io;
 
 export const setIo = (socketIo) => { io = socketIo; };
+
+const expireInterviewLink = (application, reason) => {
+  if (!application?.interview) return;
+  application.interview.meetLink = '';
+  application.interview.expiredAt = new Date();
+  application.interview.expiredReason = reason;
+};
 
 export const createJob = async (req, res) => {
   try {
     const normalizedTitle = req.body.title?.trim();
     const normalizedLocation = req.body.location?.trim();
+    const normalizedHospitalName = req.body.hospitalName?.trim();
+    const normalizedExperienceRequired = req.body.experienceRequired?.trim();
     const normalizedDescription = req.body.description?.trim();
     const normalizedRequirements = req.body.requirements?.trim();
     const salary = Number(req.body.salary);
@@ -48,6 +58,8 @@ export const createJob = async (req, res) => {
       specialization: req.body.specialization,
       salary,
       location: normalizedLocation,
+      hospitalName: normalizedHospitalName || '',
+      experienceRequired: normalizedExperienceRequired || '',
       type: req.body.type,
       expiryDate,
       description: normalizedDescription,
@@ -77,6 +89,8 @@ export const getJobs = async (req, res) => {
 
     if (specialization) query.specialization = { $regex: specialization, $options: 'i' };
     if (location) query.location = { $regex: location.trim(), $options: 'i' };
+    if (req.query.hospitalName) query.hospitalName = { $regex: req.query.hospitalName.trim(), $options: 'i' };
+    if (req.query.experienceRequired) query.experienceRequired = { $regex: req.query.experienceRequired.trim(), $options: 'i' };
     if (salary) query.salary = { $gte: Number(salary) };
     if (type) query.type = type;
 
@@ -117,6 +131,8 @@ export const getMyApplications = async (req, res) => {
         appliedAt: application?.appliedAt,
         rejectionReason: application?.rejectionReason || '',
         nextStep: application?.nextStep || '',
+        interview: application?.interview || null,
+        offer: application?.offer || null,
       };
     });
 
@@ -143,6 +159,11 @@ export const applyForJob = async (req, res) => {
       applicantName: req.body.name || '',
       applicantEmail: req.body.email || '',
       applicantSpecialization: req.body.specialization || '',
+      resumeAnalysis: req.body.resumeAnalysis || null,
+      resumeScore: Number.isFinite(Number(req.body.resumeScore)) ? Number(req.body.resumeScore) : req.body.resumeAnalysis?.resume_score ?? null,
+      resumeSeniority: req.body.resumeSeniority || req.body.resumeAnalysis?.seniority_level || '',
+      recommendedRoles: Array.isArray(req.body.recommendedRoles) ? req.body.recommendedRoles : req.body.resumeAnalysis?.recommended_roles || [],
+      missingInformation: Array.isArray(req.body.missingInformation) ? req.body.missingInformation : req.body.resumeAnalysis?.missing_information || [],
     });
     await job.save();
     if (io) io.emit('applicationUpdate', { jobId: job._id, doctorId: req.user.id, status: 'applied' });
@@ -157,8 +178,8 @@ export const updateApplicationStatus = async (req, res) => {
     const { jobId, doctorId } = req.params;
     const { status, rejectionReason = '', nextStep = '' } = req.body;
 
-    if (!['shortlisted', 'rejected'].includes(status)) {
-      return res.status(400).json({ message: 'Status must be shortlisted or rejected' });
+    if (!['screening', 'shortlisted', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Status must be screening, shortlisted, or rejected' });
     }
 
     if (status === 'rejected' && !String(rejectionReason).trim()) {
@@ -170,28 +191,175 @@ export const updateApplicationStatus = async (req, res) => {
     }
 
     const job = await Job.findOneAndUpdate(
-      { _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId },
-      {
-        $set: {
-          'applications.$.status': status,
-          'applications.$.rejectionReason': status === 'rejected' ? String(rejectionReason).trim() : '',
-          'applications.$.nextStep': status === 'shortlisted' ? String(nextStep).trim() : '',
-        }
-      },
-      { new: true }
+      { _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId }
     );
-
     if (!job) return res.status(404).json({ message: 'Job or application not found' });
+    const application = job.applications.find(app => app.doctorId === doctorId);
+    application.status = status;
+    application.rejectionReason = status === 'rejected' ? String(rejectionReason).trim() : '';
+    application.nextStep = status === 'shortlisted' ? String(nextStep).trim() : status === 'screening' ? 'Application moved to screening.' : '';
+    if (status === 'rejected') {
+      expireInterviewLink(application, 'Application rejected');
+    }
+    await job.save();
+
     if (io) {
       io.emit('applicationUpdate', {
         jobId,
         doctorId,
         status,
         rejectionReason: status === 'rejected' ? String(rejectionReason).trim() : '',
-        nextStep: status === 'shortlisted' ? String(nextStep).trim() : '',
+          nextStep: application.nextStep,
       });
     }
     res.json({ message: 'Status updated', job });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const scheduleInterview = async (req, res) => {
+  try {
+    const { jobId, doctorId } = req.params;
+    const {
+      scheduledAt,
+      durationMinutes = 30,
+      mode = 'google_meet',
+      location = '',
+      notes = '',
+    } = req.body;
+
+    const start = new Date(scheduledAt);
+    if (Number.isNaN(start.getTime()) || start <= new Date()) {
+      return res.status(400).json({ message: 'Interview date/time must be in the future' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId });
+    if (!job) return res.status(404).json({ message: 'Job or application not found' });
+
+    const application = job.applications.find(app => app.doctorId === doctorId);
+    if (!application || !['shortlisted', 'interview_scheduled'].includes(application.status)) {
+      return res.status(400).json({ message: 'Candidate must be shortlisted before scheduling interview' });
+    }
+
+    const meetLink = mode === 'google_meet' ? createGoogleMeetLink() : '';
+    const calendarLocation = mode === 'google_meet' ? meetLink : location;
+    const title = `Interview: ${job.title}`;
+    const details = [
+      `Position: ${job.title}`,
+      `Specialization: ${job.specialization}`,
+      notes ? `Notes: ${notes}` : '',
+      meetLink ? `Video Meeting: ${meetLink}` : '',
+    ].filter(Boolean).join('\n');
+    const calendarLink = createCalendarLink({
+      title,
+      details,
+      location: calendarLocation,
+      startsAt: start,
+      durationMinutes: Number(durationMinutes) || 30,
+    });
+
+    application.status = 'interview_scheduled';
+    application.nextStep = `Interview scheduled for ${start.toLocaleString()}`;
+    application.interview = {
+      scheduledAt: start,
+      durationMinutes: Number(durationMinutes) || 30,
+      mode,
+      meetLink,
+      calendarLink,
+      location,
+      notes,
+    };
+
+    await job.save();
+
+    const notification = await sendInterviewNotification({
+      to: application.applicantEmail,
+      subject: `Interview scheduled for ${job.title}`,
+      message: [
+        `Hi ${application.applicantName || 'Candidate'},`,
+        '',
+        `Your interview for ${job.title} has been scheduled.`,
+        `Date & Time: ${start.toLocaleString()}`,
+        `Duration: ${Number(durationMinutes) || 30} minutes`,
+        meetLink ? `Video Meeting: ${meetLink}` : '',
+        notes ? `Notes: ${notes}` : '',
+        '',
+        'Regards,',
+        'MedicoJobs Team',
+      ].filter(Boolean).join('\n'),
+    });
+
+    if (io) io.emit('applicationUpdate', { jobId, doctorId, status: application.status, interview: application.interview });
+    res.json({ message: 'Interview scheduled', job, interview: application.interview, notification });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const completeInterview = async (req, res) => {
+  try {
+    const { jobId, doctorId } = req.params;
+    const job = await Job.findOne({ _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId });
+    if (!job) return res.status(404).json({ message: 'Job or application not found' });
+    const application = job.applications.find(app => app.doctorId === doctorId);
+    if (!application || application.status !== 'interview_scheduled') {
+      return res.status(400).json({ message: 'Interview must be scheduled before it can be completed' });
+    }
+    application.status = 'interview_completed';
+    application.nextStep = req.body.note || 'Interview completed. Awaiting hiring decision.';
+    application.interview.completedAt = new Date();
+    await job.save();
+    if (io) io.emit('applicationUpdate', { jobId, doctorId, status: application.status });
+    res.json({ message: 'Interview completed', job });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const makeOffer = async (req, res) => {
+  try {
+    const { jobId, doctorId } = req.params;
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ message: 'Offer note is required' });
+    const job = await Job.findOne({ _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId });
+    if (!job) return res.status(404).json({ message: 'Job or application not found' });
+    const application = job.applications.find(app => app.doctorId === doctorId);
+    if (!application || application.status !== 'interview_completed') {
+      return res.status(400).json({ message: 'Interview must be completed before offer' });
+    }
+    application.status = 'offer';
+    application.nextStep = note;
+    application.offer = { ...application.offer, note, offeredAt: new Date() };
+    await job.save();
+    await sendInterviewNotification({
+      to: application.applicantEmail,
+      subject: `Offer update for ${job.title}`,
+      message: note,
+    });
+    if (io) io.emit('applicationUpdate', { jobId, doctorId, status: application.status });
+    res.json({ message: 'Offer sent', job });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const markHired = async (req, res) => {
+  try {
+    const { jobId, doctorId } = req.params;
+    const job = await Job.findOne({ _id: jobId, hospitalId: req.user.id, 'applications.doctorId': doctorId });
+    if (!job) return res.status(404).json({ message: 'Job or application not found' });
+    const application = job.applications.find(app => app.doctorId === doctorId);
+    if (!application || application.status !== 'offer') {
+      return res.status(400).json({ message: 'Offer must be sent before hiring' });
+    }
+    application.status = 'joined';
+    application.nextStep = req.body.note || 'Candidate joined.';
+    application.offer = { ...application.offer, hiredAt: new Date() };
+    expireInterviewLink(application, 'Candidate joined');
+    await job.save();
+    if (io) io.emit('applicationUpdate', { jobId, doctorId, status: application.status });
+    res.json({ message: 'Candidate hired', job });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
