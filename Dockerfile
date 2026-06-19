@@ -1,12 +1,24 @@
-FROM node:20
+FROM node:22-alpine AS deps
 
 WORKDIR /app
-
 COPY package*.json ./
+RUN npm ci --omit=dev
 
-RUN npm install
+FROM node:22-alpine AS runner
 
-COPY . .
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+COPY server.js ./
+COPY controllers ./controllers
+COPY middleware ./middleware
+COPY models ./models
+COPY routes ./routes
+COPY utils ./utils
+
+USER node
 EXPOSE 5002
 
 CMD ["npm", "start"]
