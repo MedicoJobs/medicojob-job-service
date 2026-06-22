@@ -69,7 +69,7 @@ jobs:
             REACT_APP_API_URL=${{ vars.REACT_APP_API_URL || 'https://medicojobs.online' }}
 
       - name: Scan built image with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           image-ref: ${{ steps.image.outputs.uri }}
           format: table
