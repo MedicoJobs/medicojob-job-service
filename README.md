@@ -4,7 +4,7 @@ This repository contains the job-service microservice.
 
 ## CI
 
-The CI pipeline runs SonarQube first, then Snyk.
+The CI pipeline runs SonarCloud first, then Snyk.
 
 ## Docker
 
