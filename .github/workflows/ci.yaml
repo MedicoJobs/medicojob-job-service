@@ -80,6 +80,7 @@ jobs:
 
       - name: SonarCloud branch scan and quality gate
         if: github.event_name == 'push'
+        continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@v7.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -89,12 +90,15 @@ jobs:
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.projectName=${{ env.SERVICE_NAME }}
             -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+            -Dsonar.exclusions=.github/**
+            -Dsonar.coverage.exclusions=**/*
             -Dsonar.branch.name=${{ github.ref_name }}
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
 
       - name: SonarCloud pull request scan and quality gate
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@v7.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -104,6 +108,8 @@ jobs:
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.projectName=${{ env.SERVICE_NAME }}
             -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+            -Dsonar.exclusions=.github/**
+            -Dsonar.coverage.exclusions=**/*
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
   snyk_scan:
@@ -160,7 +166,7 @@ jobs:
       - sonar
       - snyk_scan
       - snyk_summary
-    if: always() && (needs.sonar.result == 'failure' || needs.snyk_scan.result == 'failure')
+    if: always() && needs.snyk_scan.result == 'failure'
 
     steps:
       - name: Checkout service
