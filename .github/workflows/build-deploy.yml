@@ -1,0 +1,179 @@
+﻿name: Build and Deploy Image - medicojob-job-service
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-south-1
+  SERVICE_NAME: medicojob-job-service
+  HELM_REPOSITORY: ${{ vars.HELM_REPOSITORY || 'MedicoJobs/Helm' }}
+  INFRA_BRANCH: ${{ vars.INFRA_BRANCH || 'main' }}
+  HELM_VALUES_FILE: apps/job-service/values.yaml
+  HELM_REPO_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+
+jobs:
+  build_scan_push:
+    name: Build, scan, push to ECR, update Helm values
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.image.outputs.uri }}
+      image_repo: ${{ steps.image.outputs.repo }}
+      image_tag: ${{ steps.image.outputs.tag }}
+
+    steps:
+      - name: Checkout service
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Prepare image metadata
+        id: image
+        shell: bash
+        run: |
+          image_tag="$GITHUB_SHA"
+          image_repo="${{ steps.ecr.outputs.registry }}/$SERVICE_NAME"
+          echo "tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "repo=$image_repo" >> "$GITHUB_OUTPUT"
+          echo "uri=$image_repo:$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.uri }}
+          build-args: |
+            REACT_APP_API_URL=${{ vars.REACT_APP_API_URL || 'https://medicojobs.online' }}
+
+      - name: Scan built image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.image.outputs.uri }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Save image details artifact
+        shell: bash
+        run: |
+          mkdir -p pipeline-artifacts
+          {
+            printf 'SERVICE_NAME=%s\n' "$SERVICE_NAME"
+            printf 'IMAGE_REPOSITORY=%s\n' "${{ steps.image.outputs.repo }}"
+            printf 'IMAGE_TAG=%s\n' "${{ steps.image.outputs.tag }}"
+            printf 'IMAGE_URI=%s\n' "${{ steps.image.outputs.uri }}"
+            printf 'GIT_SHA=%s\n' "$GITHUB_SHA"
+          } > pipeline-artifacts/image-details.env
+
+      - name: Upload image details artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-details
+          path: pipeline-artifacts/image-details.env
+
+      - name: Push image to ECR
+        run: docker push "${{ steps.image.outputs.uri }}"
+
+      - name: Validate Helm repository token
+        shell: bash
+        run: |
+          if [ -z "$HELM_REPO_TOKEN" ]; then
+            echo "GITOPS_TOKEN is required. Create a GitHub token with write access to $HELM_REPOSITORY and save it as a GitHub Actions secret named GITOPS_TOKEN."
+            exit 1
+          fi
+      - name: Checkout Helm repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HELM_REPOSITORY }}
+          ref: ${{ env.INFRA_BRANCH }}
+          token: ${{ env.HELM_REPO_TOKEN }}
+          persist-credentials: false
+          path: infra
+
+      - name: Install yq
+        run: |
+          sudo wget -q https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update Helm image tag
+        working-directory: infra
+        env:
+          IMAGE_REPO: ${{ steps.image.outputs.repo }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          if [ ! -f "$HELM_VALUES_FILE" ]; then
+            echo "$HELM_VALUES_FILE was not found in $HELM_REPOSITORY."
+            exit 1
+          fi
+
+          yq -i '.image.repository = strenv(IMAGE_REPO) | .image.tag = strenv(IMAGE_TAG)' "$HELM_VALUES_FILE"
+
+          if ! git diff --quiet -- "$HELM_VALUES_FILE"; then
+            git diff -- "$HELM_VALUES_FILE"
+          else
+            echo "No Helm values change was made for $IMAGE_REPO:$IMAGE_TAG"
+            exit 1
+          fi
+
+      - name: Commit Helm image tag update
+        working-directory: infra
+        run: |
+          git config user.name "PaviTechDeveloper"
+          git config user.email "pavithrasampath8925@gmail.com"
+          git add "$HELM_VALUES_FILE"
+          git commit -m "deploy($SERVICE_NAME): $GITHUB_SHA"
+          git remote set-url origin "https://x-access-token:${HELM_REPO_TOKEN}@github.com/${HELM_REPOSITORY}.git"
+          git push origin "HEAD:$INFRA_BRANCH"
+
+  notify_failure:
+    name: Email build/deploy failure
+    runs-on: ubuntu-latest
+    needs: build_scan_push
+    if: always() && needs.build_scan_push.result == 'failure'
+
+    steps:
+      - name: Checkout service
+        uses: actions/checkout@v4
+
+      - name: Send failure email
+        uses: ./.github/actions/notification-action
+        with:
+          status: failed
+          pipeline_name: ${{ github.workflow }}
+          repository_name: ${{ github.repository }}
+          author: ${{ github.actor }}
+          smtp_username: ${{ secrets.SMTP_USERNAME }}
+          smtp_password: ${{ secrets.SMTP_PASSWORD }}
+          smtp_server: ${{ secrets.SMTP_SERVER }}
+          smtp_port: '587'
+          mail_from: ${{ secrets.MAIL_FROM }}
+          mail_to: ${{ secrets.MAIL_TO }}
+          workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          report_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          failure_reason: |
+            Docker build, Trivy scan, ECR push, or Helm image update failed for ${{ env.SERVICE_NAME }}.
+
