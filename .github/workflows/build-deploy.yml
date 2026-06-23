@@ -1,4 +1,4 @@
-﻿name: Build and Deploy Image - medicojob-job-service
+name: Build and Deploy Image - medicojob-job-service
 
 on:
   push:
@@ -120,6 +120,7 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
 
       - name: Update Helm image tag
+        id: update_helm
         working-directory: infra
         env:
           IMAGE_REPO: ${{ steps.image.outputs.repo }}
@@ -134,12 +135,14 @@ jobs:
 
           if ! git diff --quiet -- "$HELM_VALUES_FILE"; then
             git diff -- "$HELM_VALUES_FILE"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "No Helm values change was made for $IMAGE_REPO:$IMAGE_TAG"
-            exit 1
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Commit Helm image tag update
+        if: steps.update_helm.outputs.changed == 'true'
         working-directory: infra
         run: |
           git config user.name "PaviTechDeveloper"
